@@ -46,7 +46,8 @@
   /* Scroll-video stage */
   #scroll-stage { height: 500vh; position: relative; }
   #stage-sticky { position: sticky; top: 0; height: 100vh; overflow: hidden; }
-  #scroll-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #frame-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #scroll-video { display: none; }
   #stage-overlay { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.05) 35%, rgba(0,0,0,0.15) 70%, rgba(0,0,0,0.85) 100%); }
 </style>
 </head>
@@ -96,7 +97,8 @@
 <!-- ===================== SCROLL-VIDEO HERO ===================== -->
 <section id="scroll-stage">
   <div id="stage-sticky">
-    <video id="scroll-video" src="scroll-video.mp4" muted playsinline preload="auto"></video>
+    <canvas id="frame-canvas"></canvas>
+    <video id="scroll-video" src="scroll-video.mp4" muted playsinline preload="auto" crossorigin="anonymous"></video>
     <div id="stage-overlay"></div>
 
     <!-- Top hero copy -->
@@ -343,30 +345,50 @@ lucide.createIcons();
   document.querySelectorAll('.mobile-link').forEach(function (a) { a.addEventListener('click', function () { setOpen(false); }); });
 })();
 
-/* ---------- Scroll-driven video ---------- */
+/* ---------- Scroll-driven video (canvas + video hybrid) ---------- */
 (function () {
+  var canvas = document.getElementById('frame-canvas');
+  var ctx = canvas.getContext('2d');
   var video = document.getElementById('scroll-video');
   var stage = document.getElementById('scroll-stage');
   var currentTime = 0;
   var targetTime = 0;
   var LERP = 0.12;
   var raf = null;
+  var ready = false;
+  var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    if (ready) drawFrame();
+  }
+
+  function drawFrame() {
+    if (video.readyState < 2) return;
+    var vw = video.videoWidth, vh = video.videoHeight;
+    var scale = Math.max(canvas.width / vw, canvas.height / vh);
+    var w = vw * scale, h = vh * scale;
+    ctx.drawImage(video, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+  }
 
   function tick() {
     var diff = targetTime - currentTime;
     if (Math.abs(diff) < 0.01) {
       currentTime = targetTime;
       video.currentTime = currentTime;
+      drawFrame();
       raf = null;
       return;
     }
     currentTime += diff * LERP;
     video.currentTime = currentTime;
+    drawFrame();
     raf = requestAnimationFrame(tick);
   }
 
   function update() {
-    if (!video.duration) return;
+    if (!ready) return;
     var rect = stage.getBoundingClientRect();
     var scrollable = stage.offsetHeight - window.innerHeight;
     var progress = Math.min(Math.max(-rect.top / scrollable, 0), 1);
@@ -374,12 +396,37 @@ lucide.createIcons();
     if (!raf) raf = requestAnimationFrame(tick);
   }
 
-  video.addEventListener('loadedmetadata', function () {
+  // iOS needs video.play() from a user gesture to unlock seeking
+  function unlockVideo() {
+    if (!isMobile) return;
+    video.play().then(function () {
+      video.pause();
+      video.currentTime = 0;
+      drawFrame();
+    }).catch(function () {});
+    document.removeEventListener('touchstart', unlockVideo);
+    document.removeEventListener('click', unlockVideo);
+  }
+
+  video.addEventListener('loadeddata', function () {
+    ready = true;
     video.pause();
     video.currentTime = 0;
+    resize();
+    drawFrame();
     update();
   });
 
+  // Also listen for seeked to ensure frame is drawn after seek completes
+  video.addEventListener('seeked', function () {
+    drawFrame();
+  });
+
+  // Unlock for iOS
+  document.addEventListener('touchstart', unlockVideo, { once: true });
+  document.addEventListener('click', unlockVideo, { once: true });
+
+  window.addEventListener('resize', resize, { passive: true });
   window.addEventListener('scroll', update, { passive: true });
 })();
 
